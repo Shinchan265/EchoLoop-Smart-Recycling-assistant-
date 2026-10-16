@@ -37,12 +37,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # Create tables at import too: serverless instances may not run the startup event,
 # and a fresh /tmp database on Vercel starts empty. CREATE TABLE IF NOT EXISTS is idempotent.
-db.init()
+try:
+    db.init()
+except Exception as e:  # never crash at import; /api/health reports it
+    print("Database init failed:", e)
 
 
 @app.on_event("startup")
 def startup():
-    db.init()
+    try:
+        db.init()
+    except Exception as e:
+        print("Database init failed:", e)
     print("Detector status:", detector.load())
 
 
@@ -74,7 +80,7 @@ def register(body: Register):
         raise HTTPException(400, "Enter a valid email address.")
     try:
         uid = db.create_user(body.name.strip() or "Recycler", body.email.strip(), body.password)
-    except sqlite3.IntegrityError:
+    except db.IntegrityError:
         raise HTTPException(400, "An account with this email already exists. Log in instead.")
     return {"token": db.new_session(uid), "user": {"id": uid, "name": body.name, "email": body.email}}
 
@@ -102,7 +108,7 @@ def me(user=Depends(current_user)):
 @app.get("/api/health")
 def health():
     from categories import PRICES_UPDATED
-    return {"ok": True, "detector": detector.status, "categories": CATEGORIES, "prices_updated": PRICES_UPDATED}
+    return {"ok": True, "database": db.BACKEND, "detector": detector.status, "categories": CATEGORIES, "prices_updated": PRICES_UPDATED}
 
 
 @app.get("/api/media")

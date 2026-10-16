@@ -1,4 +1,9 @@
-"""SQLite storage: users, sessions, scans and items. Zero setup."""
+"""Storage: users, sessions, scans and items.
+
+- Local (your laptop): SQLite file next to this module. Zero setup.
+- Cloud (Vercel): set DATABASE_URL (or POSTGRES_URL) to a Postgres database, e.g. Neon.
+  Serverless instances do not share files, so SQLite there would forget accounts.
+"""
 import hashlib
 import json
 import os
@@ -7,13 +12,45 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-# On Vercel the code folder is read-only; only /tmp is writable (and it is per-instance, not permanent).
+PG_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or ""
+
+if PG_URL:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    IntegrityError = (sqlite3.IntegrityError, psycopg.IntegrityError)
+else:
+    IntegrityError = (sqlite3.IntegrityError,)
+
+# Without Postgres on Vercel, /tmp is the only writable folder (per-instance, not permanent).
 _DEFAULT_DB = "/tmp/recycle.db" if os.getenv("VERCEL") else os.path.join(os.path.dirname(__file__), "recycle.db")
 DB_PATH = os.getenv("DB_PATH", _DEFAULT_DB)
+BACKEND = "postgres" if PG_URL else "sqlite"
+
+
+class _PG:
+    """Gives a psycopg connection the small sqlite3-style API this module uses."""
+
+    def __init__(self, c):
+        self.c = c
+
+    def execute(self, sql, args=()):
+        cur = self.c.cursor(row_factory=dict_row)
+        cur.execute(sql.replace("?", "%s"), args)
+        return cur
 
 
 @contextmanager
 def conn():
+    if PG_URL:
+        # prepare_threshold=None: works through poolers (Neon/pgbouncer transaction mode)
+        c = psycopg.connect(PG_URL, connect_timeout=10, prepare_threshold=None)
+        try:
+            yield _PG(c)
+            c.commit()
+        finally:
+            c.close()
+        return
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     try:
@@ -23,7 +60,38 @@ def conn():
         c.close()
 
 
+def _insert(c, sql, args):
+    """INSERT and return the new row id on either database."""
+    if PG_URL:
+        return c.execute(sql + " RETURNING id", args).fetchone()["id"]
+    return c.execute(sql, args).lastrowid
+
+
+_PG_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS users(
+         id BIGSERIAL PRIMARY KEY, name TEXT, email TEXT UNIQUE,
+         pw_hash TEXT, salt TEXT, created DOUBLE PRECISION)""",
+    """CREATE TABLE IF NOT EXISTS sessions(
+         token TEXT PRIMARY KEY, user_id BIGINT, created DOUBLE PRECISION)""",
+    """CREATE TABLE IF NOT EXISTS scans(
+         id BIGSERIAL PRIMARY KEY, user_id BIGINT, created DOUBLE PRECISION,
+         image_w INTEGER, image_h INTEGER, source TEXT, summary TEXT, thumb TEXT)""",
+    """CREATE TABLE IF NOT EXISTS items(
+         id BIGSERIAL PRIMARY KEY, scan_id BIGINT, user_id BIGINT, created DOUBLE PRECISION,
+         label TEXT, category TEXT, material TEXT, condition TEXT,
+         weight_g DOUBLE PRECISION, value_rs DOUBLE PRECISION, co2_saved_kg DOUBLE PRECISION,
+         confidence DOUBLE PRECISION, source TEXT, data TEXT)""",
+    "CREATE INDEX IF NOT EXISTS items_user ON items(user_id)",
+    "CREATE INDEX IF NOT EXISTS scans_user ON scans(user_id)",
+]
+
+
 def init():
+    if PG_URL:
+        with conn() as c:
+            for stmt in _PG_SCHEMA:
+                c.execute(stmt)
+        return
     with conn() as c:
         c.executescript(
             """
@@ -57,11 +125,11 @@ def _hash(pw: str, salt: str) -> str:
 def create_user(name, email, pw):
     salt = secrets.token_hex(16)
     with conn() as c:
-        cur = c.execute(
+        return _insert(
+            c,
             "INSERT INTO users(name,email,pw_hash,salt,created) VALUES(?,?,?,?,?)",
             (name, email.lower(), _hash(pw, salt), salt, time.time()),
         )
-        return cur.lastrowid
 
 
 def check_user(email, pw):
@@ -75,7 +143,7 @@ def check_user(email, pw):
 def new_session(user_id):
     token = secrets.token_urlsafe(32)
     with conn() as c:
-        c.execute("INSERT INTO sessions VALUES(?,?,?)", (token, user_id, time.time()))
+        c.execute("INSERT INTO sessions(token,user_id,created) VALUES(?,?,?)", (token, user_id, time.time()))
     return token
 
 
@@ -97,10 +165,11 @@ def drop_session(token):
 def save_scan(user_id, w, h, source, items, summary, thumb=None):
     now = time.time()
     with conn() as c:
-        sid = c.execute(
+        sid = _insert(
+            c,
             "INSERT INTO scans(user_id,created,image_w,image_h,source,summary,thumb) VALUES(?,?,?,?,?,?,?)",
             (user_id, now, w, h, source, json.dumps(summary), thumb),
-        ).lastrowid
+        )
         for it in items:
             c.execute(
                 """INSERT INTO items(scan_id,user_id,created,label,category,material,condition,
@@ -118,7 +187,7 @@ def items_for(user_id=None):
     if user_id is not None:
         q, args = q + " WHERE user_id=?", (user_id,)
     with conn() as c:
-        return [dict(r) for r in c.execute(q + " ORDER BY created", args)]
+        return [dict(r) for r in c.execute(q + " ORDER BY created", args).fetchall()]
 
 
 def scans_for(user_id, limit=50):
