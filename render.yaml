@@ -1,0 +1,16 @@
+# Render: runs the FastAPI backend (free tier). Add GEMINI_API_KEY in the Render dashboard.
+services:
+  - type: web
+    name: ecoloop-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements-cloud.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DETECTOR
+        value: gemini
+      - key: PYTHON_VERSION
+        value: 3.11.9

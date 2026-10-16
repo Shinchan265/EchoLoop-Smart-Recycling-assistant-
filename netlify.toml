@@ -1,0 +1,19 @@
+# Netlify: hosts the React frontend. The Python backend runs on Render (see render.yaml).
+[build]
+  base = "frontend"
+  command = "npm install && npm run build"
+  publish = "dist"
+
+# Forward API calls to the backend on Render.
+# If your Render URL is different, change it here.
+[[redirects]]
+  from = "/api/*"
+  to = "https://ecoloop-api.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# Single-page app: every other route loads index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

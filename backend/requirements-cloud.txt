@@ -1,0 +1,8 @@
+# Lighter install for cloud hosting: no YOLO/PyTorch (too big for free tiers).
+# Detection uses Gemini Vision only.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+pillow>=10.0
+pillow-heif>=0.16
+google-genai>=1.0
