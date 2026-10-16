@@ -35,6 +35,11 @@ app = FastAPI(title="EcoLoop - Smart Recycling Assistant")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+# Create tables at import too: serverless instances may not run the startup event,
+# and a fresh /tmp database on Vercel starts empty. CREATE TABLE IF NOT EXISTS is idempotent.
+db.init()
+
+
 @app.on_event("startup")
 def startup():
     db.init()

@@ -7,7 +7,9 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "recycle.db"))
+# On Vercel the code folder is read-only; only /tmp is writable (and it is per-instance, not permanent).
+_DEFAULT_DB = "/tmp/recycle.db" if os.getenv("VERCEL") else os.path.join(os.path.dirname(__file__), "recycle.db")
+DB_PATH = os.getenv("DB_PATH", _DEFAULT_DB)
 
 
 @contextmanager
